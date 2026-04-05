@@ -10,7 +10,6 @@ from config import SHEET_ID
 # CONFIG
 # =====================================================
 
-#SHEET_ID       = "your_sheet_id_here"
 GAIN_THRESHOLD = 15.0
 
 # =====================================================
@@ -91,6 +90,7 @@ def get_gainers():
 
 # =====================================================
 # STEP 2: DELETE ROWS WHERE COLUMN B = "TP COMPLETED"
+#         Only called every 10th cycle (~10 hours)
 # =====================================================
 
 def delete_tp_completed_rows():
@@ -135,7 +135,7 @@ def add_new_gainers(gainers):
 # MAIN BOT
 # =====================================================
 
-def run_bot():
+def run_bot(cycle):
     print("=" * 50)
     print("🤖 BOT STARTED")
     print("=" * 50)
@@ -146,8 +146,12 @@ def run_bot():
         print("No gainers found above threshold.")
         return
 
-    print("\n--- Cleaning TP COMPLETED rows ---")
-    delete_tp_completed_rows()
+    # Delete TP COMPLETED rows only on every 10th cycle
+    if cycle % 10 == 0:
+        print(f"\n--- Cycle #{cycle}: Cleaning TP COMPLETED rows ---")
+        delete_tp_completed_rows()
+    else:
+        print(f"\n--- Cycle #{cycle}: Skipping TP cleanup (next at cycle #{(cycle // 10 + 1) * 10}) ---")
 
     print("\n--- Updating sheet with new gainers ---")
     added = add_new_gainers(gainers)
@@ -171,7 +175,7 @@ while True:
         print(f"🔁 CYCLE #{cycle}  |  {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*50}")
 
-        run_bot()
+        run_bot(cycle)
 
         cycle += 1
         print(f"\n⏳ Sleeping 1 hour... next run at {time.strftime('%H:%M:%S', time.localtime(time.time() + 3600))}")
