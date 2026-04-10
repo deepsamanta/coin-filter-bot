@@ -10,7 +10,9 @@ from config import SHEET_ID
 # CONFIG
 # =====================================================
 
-GAIN_THRESHOLD = 15.0
+EMA_LEN        = 21
+FILTER_LOOK    = 50      # last 50 x 4H candles
+MIN_ABOVE_PERC = 70.0    # % of bars whose close must be ABOVE the 21 EMA
 
 # =====================================================
 # GOOGLE SHEETS CONNECTION
@@ -35,14 +37,39 @@ def pair_to_symbol(pair):
     return pair.replace("B-", "").replace("_", "")
 
 
-def get_daily_change_pct(pair):
-    url = "https://public.coindcx.com/market_data/candlesticks"
+# =====================================================
+# EMA HELPER
+# =====================================================
+
+def calc_ema(closes, length):
+    k = 2 / (length + 1)
+    ema_vals = [None] * len(closes)
+
+    if len(closes) < length:
+        return ema_vals
+
+    ema_vals[length - 1] = sum(closes[:length]) / length
+
+    for i in range(length, len(closes)):
+        ema_vals[i] = closes[i] * k + ema_vals[i - 1] * (1 - k)
+
+    return ema_vals
+
+
+# =====================================================
+# COIN FILTER — 70% of last 50 x 4H candles ABOVE 21 EMA
+#               + current price must also be ABOVE 21 EMA
+# =====================================================
+
+def passes_ema_filter(pair):
+    candles_needed = EMA_LEN + FILTER_LOOK
     now = int(time.time())
+    url = "https://public.coindcx.com/market_data/candlesticks"
     params = {
         "pair":       pair,
-        "from":       now - (24 * 3600),
+        "from":       now - (candles_needed * 4 * 3600),
         "to":         now,
-        "resolution": "60",
+        "resolution": "240",
         "pcode":      "f",
     }
     try:
@@ -50,47 +77,69 @@ def get_daily_change_pct(pair):
             requests.get(url, params=params, timeout=10).json()["data"],
             key=lambda x: x["time"]
         )
-        if len(candles) < 2:
-            return None
-        open_24h  = float(candles[0]["open"])
-        close_now = float(candles[-1]["close"])
-        return round(((close_now - open_24h) / open_24h) * 100, 2)
+        if len(candles) < candles_needed:
+            return False
+
+        closes   = [float(c["close"]) for c in candles]
+        ema_vals = calc_ema(closes, EMA_LEN)
+
+        bars_above = 0
+        checked    = 0
+        for i in range(len(closes) - FILTER_LOOK, len(closes)):
+            if ema_vals[i] is None:
+                continue
+            checked += 1
+            if closes[i] > ema_vals[i]:   # ← flipped: ABOVE EMA
+                bars_above += 1
+
+        if checked == 0:
+            return False
+
+        pct_above = (bars_above / checked) * 100
+        if pct_above < MIN_ABOVE_PERC:    # ← flipped: must be >= 70% above
+            return False
+
+        # Current price must also be ABOVE the 21 EMA right now
+        current_close = closes[-1]
+        current_ema   = ema_vals[-1]
+        if current_ema is None or current_close <= current_ema:  # ← flipped
+            return False
+
+        return True
+
     except Exception:
-        return None
+        return False
 
 
 # =====================================================
-# STEP 1: SCAN ALL COINS → FILTER > 15% GAIN
+# STEP 1: SCAN ALL COINS
 # =====================================================
 
-def get_gainers():
+def get_winners():
     pairs   = get_all_pairs()
-    gainers = []
+    winners = []
 
-    print(f"Scanning {len(pairs)} pairs for >{GAIN_THRESHOLD}% gain...\n")
+    print(f"Scanning {len(pairs)} pairs — 70% of last 50 x 4H candles ABOVE 21 EMA + current price above EMA...\n")
 
     for i, pair in enumerate(pairs):
         symbol = pair_to_symbol(pair)
-        pct    = get_daily_change_pct(pair)
 
-        if pct is None:
-            print(f"[{i+1}/{len(pairs)}] {symbol:20s} → no data")
-            continue
+        ema_ok = passes_ema_filter(pair)
 
-        print(f"[{i+1}/{len(pairs)}] {symbol:20s} → {pct:+.2f}%")
-
-        if pct >= GAIN_THRESHOLD:
-            gainers.append(symbol)
+        if ema_ok:
+            print(f"[{i+1}/{len(pairs)}] {symbol:20s} → ✅ passed — added!")
+            winners.append(symbol)
+        else:
+            print(f"[{i+1}/{len(pairs)}] {symbol:20s} → ❌ failed EMA filter")
 
         time.sleep(0.2)
 
-    print(f"\n✅ Found {len(gainers)} gainers above {GAIN_THRESHOLD}%: {gainers}\n")
-    return gainers
+    print(f"\n✅ Found {len(winners)} coins: {winners}\n")
+    return winners
 
 
 # =====================================================
 # STEP 2: DELETE ROWS WHERE COLUMN B = "TP COMPLETED"
-#         Only called every 10th cycle (~10 hours)
 # =====================================================
 
 def delete_tp_completed_rows():
@@ -108,7 +157,7 @@ def delete_tp_completed_rows():
 # STEP 3: ADD NEW COINS NOT ALREADY IN COLUMN A
 # =====================================================
 
-def add_new_gainers(gainers):
+def add_new_winners(winners):
     rows = sheet.get_all_values()
 
     existing_symbols = set(
@@ -119,7 +168,7 @@ def add_new_gainers(gainers):
     print(f"[SHEET] Existing symbols: {existing_symbols}\n")
 
     added = []
-    for symbol in gainers:
+    for symbol in winners:
         if symbol.upper() not in existing_symbols:
             sheet.append_row([symbol, ""])
             print(f"[SHEET] ➕ Added new coin: {symbol}")
@@ -140,21 +189,20 @@ def run_bot(cycle):
     print("🤖 BOT STARTED")
     print("=" * 50)
 
-    gainers = get_gainers()
+    winners = get_winners()
 
-    if not gainers:
-        print("No gainers found above threshold.")
+    if not winners:
+        print("No coins passed the EMA filter.")
         return
 
-    # Delete TP COMPLETED rows only on every 10th cycle
     if cycle % 10 == 0:
-        print(f"\n--- Cycle #{cycle}: Cleaning TP COMPLETED rows ---")
+        print("\n--- Cleaning TP COMPLETED rows (every 10th cycle) ---")
         delete_tp_completed_rows()
     else:
-        print(f"\n--- Cycle #{cycle}: Skipping TP cleanup (next at cycle #{(cycle // 10 + 1) * 10}) ---")
+        print(f"\n--- Skipping TP cleanup (next cleanup at cycle {((cycle // 10) + 1) * 10}) ---")
 
-    print("\n--- Updating sheet with new gainers ---")
-    added = add_new_gainers(gainers)
+    print("\n--- Updating sheet with new coins ---")
+    added = add_new_winners(winners)
 
     print("\n" + "=" * 50)
     print(f"✅ DONE — {len(added)} new coins added to sheet")
@@ -178,10 +226,10 @@ while True:
         run_bot(cycle)
 
         cycle += 1
-        print(f"\n⏳ Sleeping 1 hour... next run at {time.strftime('%H:%M:%S', time.localtime(time.time() + 3600))}")
-        time.sleep(3600)   # wait 1 hour
+        print(f"\n⏳ Sleeping 1 hour... next run at {time.strftime('%H:%M:%S', time.localtime(time.time() + 7200))}")
+        time.sleep(7200)
 
     except Exception as e:
         print(f"\n❌ BOT ERROR: {e}")
         print("⏳ Retrying in 60 seconds...")
-        time.sleep(60)     # on error wait 1 min and retry
+        time.sleep(60)
