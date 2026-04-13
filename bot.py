@@ -219,12 +219,11 @@ def run_bot(cycle):
         return
 
     # Every 10th cycle: delete TP COMPLETED rows
-    if cycle % 10 == 0:
+    if cycle % 1 == 0:
         print("\n--- Cleaning TP COMPLETED rows (every 10th cycle) ---")
         delete_tp_completed_rows()
     else:
-        print(f"\n--- Skipping TP cleanup (next cleanup at cycle {((cycle // 10) + 1) * 10}) ---")
-
+        print(f"\n--- Skipping TP cleanup (next cleanup at cycle {((cycle // 1) + 1) * 1}) ---")
     # Every 5th cycle: remove failed coins with no active trade
     if cycle % 5 == 0:
         print("\n--- Removing failed coins with no active trade (every 5th cycle) ---")
