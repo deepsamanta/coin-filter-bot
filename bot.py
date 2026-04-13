@@ -89,20 +89,19 @@ def passes_ema_filter(pair):
             if ema_vals[i] is None:
                 continue
             checked += 1
-            if closes[i] > ema_vals[i]:   # ← flipped: ABOVE EMA
+            if closes[i] > ema_vals[i]:
                 bars_above += 1
 
         if checked == 0:
             return False
 
         pct_above = (bars_above / checked) * 100
-        if pct_above < MIN_ABOVE_PERC:    # ← flipped: must be >= 70% above
+        if pct_above < MIN_ABOVE_PERC:
             return False
 
-        # Current price must also be ABOVE the 21 EMA right now
         current_close = closes[-1]
         current_ema   = ema_vals[-1]
-        if current_ema is None or current_close <= current_ema:  # ← flipped
+        if current_ema is None or current_close <= current_ema:
             return False
 
         return True
@@ -112,30 +111,30 @@ def passes_ema_filter(pair):
 
 
 # =====================================================
-# STEP 1: SCAN ALL COINS
+# STEP 1: SCAN ALL COINS — returns (winners, failed_symbols)
 # =====================================================
 
 def get_winners():
     pairs   = get_all_pairs()
     winners = []
+    failed  = []
 
     print(f"Scanning {len(pairs)} pairs — 70% of last 50 x 4H candles ABOVE 21 EMA + current price above EMA...\n")
 
     for i, pair in enumerate(pairs):
         symbol = pair_to_symbol(pair)
 
-        ema_ok = passes_ema_filter(pair)
-
-        if ema_ok:
+        if passes_ema_filter(pair):
             print(f"[{i+1}/{len(pairs)}] {symbol:20s} → ✅ passed — added!")
             winners.append(symbol)
         else:
             print(f"[{i+1}/{len(pairs)}] {symbol:20s} → ❌ failed EMA filter")
+            failed.append(symbol)
 
         time.sleep(0.2)
 
     print(f"\n✅ Found {len(winners)} coins: {winners}\n")
-    return winners
+    return winners, failed
 
 
 # =====================================================
@@ -154,7 +153,31 @@ def delete_tp_completed_rows():
 
 
 # =====================================================
-# STEP 3: ADD NEW COINS NOT ALREADY IN COLUMN A
+# STEP 3: REMOVE FAILED COINS WITH NO ACTIVE TRADE
+#         Runs every 5th cycle
+#         Removes coin if: failed EMA filter AND column B is blank
+# =====================================================
+
+def remove_failed_coins(failed_symbols):
+    rows = sheet.get_all_values()
+    failed_upper = set(s.upper() for s in failed_symbols)
+
+    print("\n--- Checking sheet for failed coins with no active trade ---")
+
+    for i in range(len(rows) - 1, -1, -1):
+        symbol = str(rows[i][0]).strip().upper() if rows[i] else ""
+        col_b  = str(rows[i][1]).strip() if len(rows[i]) > 1 else ""
+
+        if symbol in failed_upper and col_b == "":
+            sheet.delete_rows(i + 1)
+            print(f"[SHEET] 🗑️  Removed {symbol} — failed EMA + no active trade")
+            time.sleep(0.3)
+        elif symbol in failed_upper and col_b != "":
+            print(f"[SHEET] ⚠️  Skipped {symbol} — failed EMA but trade is active ({col_b})")
+
+
+# =====================================================
+# STEP 4: ADD NEW COINS NOT ALREADY IN COLUMN A
 # =====================================================
 
 def add_new_winners(winners):
@@ -189,17 +212,25 @@ def run_bot(cycle):
     print("🤖 BOT STARTED")
     print("=" * 50)
 
-    winners = get_winners()
+    winners, failed = get_winners()
 
     if not winners:
         print("No coins passed the EMA filter.")
         return
 
+    # Every 10th cycle: delete TP COMPLETED rows
     if cycle % 10 == 0:
         print("\n--- Cleaning TP COMPLETED rows (every 10th cycle) ---")
         delete_tp_completed_rows()
     else:
         print(f"\n--- Skipping TP cleanup (next cleanup at cycle {((cycle // 10) + 1) * 10}) ---")
+
+    # Every 5th cycle: remove failed coins with no active trade
+    if cycle % 5 == 0:
+        print("\n--- Removing failed coins with no active trade (every 5th cycle) ---")
+        remove_failed_coins(failed)
+    else:
+        print(f"\n--- Skipping failed coin cleanup (next cleanup at cycle {((cycle // 5) + 1) * 5}) ---")
 
     print("\n--- Updating sheet with new coins ---")
     added = add_new_winners(winners)
@@ -212,7 +243,7 @@ def run_bot(cycle):
 
 
 # =====================================================
-# INFINITE LOOP — RUNS EVERY HOUR
+# INFINITE LOOP — RUNS EVERY 2 HOURS
 # =====================================================
 
 cycle = 1
@@ -226,8 +257,8 @@ while True:
         run_bot(cycle)
 
         cycle += 1
-        print(f"\n⏳ Sleeping 1 hour... next run at {time.strftime('%H:%M:%S', time.localtime(time.time() + 7200))}")
-        time.sleep(7200)
+        print(f"\n⏳ Sleeping 2 hours... next run at {time.strftime('%H:%M:%S', time.localtime(time.time() + 3600))}")
+        time.sleep(3600)
 
     except Exception as e:
         print(f"\n❌ BOT ERROR: {e}")
