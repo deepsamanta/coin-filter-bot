@@ -11,7 +11,7 @@ from config import SHEET_ID
 # =====================================================
 
 EMA_LEN        = 21
-FILTER_LOOK    = 100      # last 100 x 4H candles
+FILTER_LOOK    = 70      # last 70 x 4H candles
 MIN_ABOVE_PERC = 65.0    # % of bars whose close must be ABOVE the 21 EMA
 
 # =====================================================
