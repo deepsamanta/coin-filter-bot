@@ -55,28 +55,36 @@ def calc_ema(closes, length):
 
     return ema_vals
 
-
 # =====================================================
-# COIN FILTER — 70% of last 50 x 4H candles ABOVE 21 EMA
-#               + current price must also be ABOVE 21 EMA
+# COIN FILTER — 70% of last 200 x 15m candles ABOVE 200 EMA
+#               + current price must also be ABOVE 200 EMA
 # =====================================================
 
 def passes_ema_filter(pair):
+
+    EMA_LEN        = 200
+    FILTER_LOOK    = 200
+    MIN_ABOVE_PERC = 70.0
+
     candles_needed = EMA_LEN + FILTER_LOOK
     now = int(time.time())
+
     url = "https://public.coindcx.com/market_data/candlesticks"
+
     params = {
-        "pair":       pair,
-        "from":       now - (candles_needed * 4 * 3600),
-        "to":         now,
-        "resolution": "240",
-        "pcode":      "f",
+        "pair": pair,
+        "from": now - (candles_needed * 15 * 60),  # 15 minute candles
+        "to": now,
+        "resolution": "15",
+        "pcode": "f",
     }
+
     try:
         candles = sorted(
             requests.get(url, params=params, timeout=10).json()["data"],
             key=lambda x: x["time"]
         )
+
         if len(candles) < candles_needed:
             return False
 
@@ -85,10 +93,14 @@ def passes_ema_filter(pair):
 
         bars_above = 0
         checked    = 0
+
+        # Check last 200 candles
         for i in range(len(closes) - FILTER_LOOK, len(closes)):
             if ema_vals[i] is None:
                 continue
+
             checked += 1
+
             if closes[i] > ema_vals[i]:
                 bars_above += 1
 
@@ -96,11 +108,14 @@ def passes_ema_filter(pair):
             return False
 
         pct_above = (bars_above / checked) * 100
+
         if pct_above < MIN_ABOVE_PERC:
             return False
 
+        # Current price must also be ABOVE 200 EMA
         current_close = closes[-1]
         current_ema   = ema_vals[-1]
+
         if current_ema is None or current_close <= current_ema:
             return False
 
@@ -108,7 +123,7 @@ def passes_ema_filter(pair):
 
     except Exception:
         return False
-
+    
 
 # =====================================================
 # STEP 1: SCAN ALL COINS — returns (winners, failed_symbols)
