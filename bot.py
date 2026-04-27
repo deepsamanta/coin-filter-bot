@@ -55,27 +55,19 @@ def calc_ema(closes, length):
 
     return ema_vals
 
-# =====================================================
-# COIN FILTER — 70% of last 200 x 15m candles ABOVE 200 EMA
-#               + current price must also be ABOVE 200 EMA
-# =====================================================
-
 def passes_ema_filter(pair):
 
     EMA_LEN        = 200
-    FILTER_LOOK    = 200
-    MIN_ABOVE_PERC = 70.0
-
-    candles_needed = EMA_LEN + FILTER_LOOK
-    now = int(time.time())
+    candles_needed = EMA_LEN + 50   # buffer for EMA stability
+    now            = int(time.time())
 
     url = "https://public.coindcx.com/market_data/candlesticks"
 
     params = {
         "pair": pair,
-        "from": now - (candles_needed * 15 * 60),  # 15 minute candles
+        "from": now - (candles_needed * 4 * 60 * 60),  # 4H candles
         "to": now,
-        "resolution": "15",
+        "resolution": "240",
         "pcode": "f",
     }
 
@@ -91,35 +83,23 @@ def passes_ema_filter(pair):
         closes   = [float(c["close"]) for c in candles]
         ema_vals = calc_ema(closes, EMA_LEN)
 
-        bars_above = 0
-        checked    = 0
-
-        # Check last 200 candles
-        for i in range(len(closes) - FILTER_LOOK, len(closes)):
-            if ema_vals[i] is None:
-                continue
-
-            checked += 1
-
-            if closes[i] > ema_vals[i]:
-                bars_above += 1
-
-        if checked == 0:
-            return False
-
-        pct_above = (bars_above / checked) * 100
-
-        if pct_above < MIN_ABOVE_PERC:
-            return False
-
-        # Current price must also be ABOVE 200 EMA
         current_close = closes[-1]
         current_ema   = ema_vals[-1]
 
-        if current_ema is None or current_close <= current_ema:
+        if current_ema is None:
             return False
 
-        return True
+        diff_pct = ((current_close - current_ema) / current_ema) * 100
+
+        # 1) Below 200 EMA, within 4% proximity  → diff between -4% and 0%
+        if -4.0 <= diff_pct < 0:
+            return True
+
+        # 2) Above 200 EMA, at least 10% away    → diff >= +10%
+        if diff_pct >= 10.0:
+            return True
+
+        return False
 
     except Exception:
         return False
@@ -134,7 +114,7 @@ def get_winners():
     winners = []
     failed  = []
 
-    print(f"Scanning {len(pairs)} pairs — 70% of last 50 x 4H candles ABOVE 21 EMA + current price above EMA...\n")
+    print(f"Scanning {len(pairs)} pairs — 4H: (below 200 EMA within 4%) OR (above 200 EMA by ≥10%)...\n")
 
     for i, pair in enumerate(pairs):
         symbol = pair_to_symbol(pair)
