@@ -30,14 +30,64 @@ def pair_to_symbol(pair):
 
 
 # =====================================================
-# STEP 1: GET ALL COINS (no filter)
+# 200 EMA (4H) FILTER HELPERS
+# =====================================================
+
+def get_4h_candles(pair, limit=300):
+    url = f"https://public.coindcx.com/market_data/candles?pair={pair}&interval=4h&limit={limit}"
+    try:
+        return requests.get(url, timeout=10).json()
+    except Exception as e:
+        print(f"[CANDLES] {pair} fetch failed: {e}")
+        return []
+
+
+def ema(values, period):
+    k = 2 / (period + 1)
+    ema_val = sum(values[:period]) / period   # SMA seed
+    for v in values[period:]:
+        ema_val = v * k + ema_val * (1 - k)
+    return ema_val
+
+
+def is_below_200ema_4h(pair):
+    candles = get_4h_candles(pair, limit=300)
+    if not candles or len(candles) < 200:
+        return False
+
+    # CoinDCX returns newest first → reverse to oldest→newest
+    candles = list(reversed(candles))
+    closes = [float(c["close"]) for c in candles]
+
+    ema200 = ema(closes, 200)
+    last_close = closes[-1]
+
+    below = last_close < ema200
+    print(f"[EMA] {pair}  close={last_close:.6f}  ema200={ema200:.6f}  {'⬇ BELOW' if below else '⬆ above'}")
+    return below
+
+
+# =====================================================
+# STEP 1: GET COINS BELOW 200 EMA ON 4H
 # =====================================================
 
 def get_losers():
     pairs  = get_all_pairs()
-    losers = [pair_to_symbol(p) for p in pairs]
+    losers = []
 
-    print(f"Found {len(losers)} pairs — no filter, all added\n")
+    print(f"Scanning {len(pairs)} pairs against 200 EMA (4h)...\n")
+
+    for p in pairs:
+        pair_name = p if isinstance(p, str) else p.get("pair")
+        if not pair_name:
+            continue
+
+        if is_below_200ema_4h(pair_name):
+            losers.append(pair_to_symbol(pair_name))
+
+        time.sleep(0.15)  # avoid rate limits
+
+    print(f"\nFound {len(losers)} coins below 200 EMA on 4h\n")
     return losers
 
 
