@@ -3,7 +3,7 @@ import time
 import gspread
 from google.oauth2.service_account import Credentials
 
-from config import SHEET_ID, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config import SHEET_ID
 
 
 # =====================================================
@@ -14,18 +14,6 @@ scope  = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 creds  = Credentials.from_service_account_file("service_account.json", scopes=scope)
 client = gspread.authorize(creds)
 sheet  = client.open_by_key(SHEET_ID).sheet1
-
-
-# =====================================================
-# TELEGRAM
-# =====================================================
-
-def send_telegram(msg):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
-    except Exception as e:
-        print(f"[TELEGRAM] Error: {e}")
 
 
 # =====================================================
@@ -205,14 +193,6 @@ def run_bot(cycle):
             if hit:
                 atl_hits.append((symbol, today_low, atl))
                 add_atl_to_sheet(symbol, today_low, atl)
-
-                msg = (
-                    f"🚨 <b>ATL HIT</b> — {symbol}\n"
-                    f"Today Low : <code>{today_low}</code>\n"
-                    f"All-Time Low: <code>{atl}</code>\n"
-                    f"Confirmed on 1D + 3D candles"
-                )
-                send_telegram(msg)
 
         except Exception as e:
             print(f"[ERROR] {symbol}: {e}")
