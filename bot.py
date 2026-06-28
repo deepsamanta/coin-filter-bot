@@ -41,16 +41,28 @@ def get_all_symbols():
     return symbols
 
 
+def symbol_to_pair(symbol):
+    """Convert e.g. BTCUSDT → B-BTC_USDT"""
+    if symbol.endswith("USDT"):
+        base = symbol[:-4]
+        return f"B-{base}_USDT"
+    return symbol
+
+
 # =====================================================
-# CANDLE FETCH — CoinDCX futures candles
+# CANDLE FETCH
 # =====================================================
 
 CANDLE_URL = "https://public.coindcx.com/market_data/candles"
 
+INTERVAL_MS = {
+    "1d": 24 * 60 * 60 * 1000,
+    "3d": 3 * 24 * 60 * 60 * 1000,
+}
+
 def fetch_candles(pair, interval, limit=500):
     """
-    interval: '1d' or '3d'
-    Returns list of candles, each normalised to a dict with key 'low'.
+    Fetches candles and returns list of {"ts": int, "low": float}, sorted oldest→newest.
     """
     try:
         params = {"pair": pair, "interval": interval, "limit": limit}
@@ -61,26 +73,37 @@ def fetch_candles(pair, interval, limit=500):
         normalised = []
         for c in data:
             if isinstance(c, dict):
-                # dict format: keys may be 'low', 'l', or positional
-                low = c.get("low") or c.get("l")
-                normalised.append({"low": float(low)})
+                ts  = int(c.get("time") or c.get("t") or c.get("timestamp") or 0)
+                low = float(c.get("low") or c.get("l") or 0)
             elif isinstance(c, (list, tuple)) and len(c) >= 4:
-                # list format: [timestamp, open, high, low, ...]
-                normalised.append({"low": float(c[3])})
+                ts  = int(c[0])
+                low = float(c[3])
             else:
-                print(f"[CANDLES] Unknown candle format: {c}")
+                print(f"[CANDLES] Unknown format: {c}")
+                continue
+            normalised.append({"ts": ts, "low": low})
+        normalised.sort(key=lambda x: x["ts"])
         return normalised
     except Exception as e:
         print(f"[CANDLES] Error fetching {pair} {interval}: {e}")
         return []
 
 
-def symbol_to_pair(symbol):
-    """Convert e.g. BTCUSDT → B-BTC_USDT"""
-    if symbol.endswith("USDT"):
-        base = symbol[:-4]
-        return f"B-{base}_USDT"
-    return symbol
+def split_candles(candles, interval):
+    """
+    Split into:
+      - closed: all fully closed candles
+      - current: the still-forming candle (most recent)
+
+    A candle is forming if its open_ts + interval_ms > now.
+    """
+    now_ms       = int(time.time() * 1000)
+    interval_ms  = INTERVAL_MS[interval]
+    closed  = [c for c in candles if c["ts"] + interval_ms <= now_ms]
+    forming = [c for c in candles if c["ts"] + interval_ms >  now_ms]
+    # current forming candle = last one; fallback to last closed if none detected
+    current = forming[-1] if forming else candles[-1]
+    return closed, current
 
 
 # =====================================================
@@ -89,45 +112,44 @@ def symbol_to_pair(symbol):
 
 def check_atl(symbol):
     """
-    Returns True if today's candle low <= all-time low on BOTH 1D and 3D candles.
-    ATL is the minimum low across ALL historical candles EXCLUDING today's candle.
+    ATL hit = current forming candle's low <= min(low) of ALL closed candles.
+    Confirmed on both 1D and 3D. Wick (low) is used — correct by definition.
     """
     pair = symbol_to_pair(symbol)
 
-    # --- 1D check ---
+    # --- 1D ---
     candles_1d = fetch_candles(pair, "1d", limit=1000)
-    if len(candles_1d) < 2:
-        print(f"[ATL] {symbol}: not enough 1D candles ({len(candles_1d)})")
-        return False
+    closed_1d, current_1d = split_candles(candles_1d, "1d")
 
-    # Last candle = today (may be forming), rest = history
-    history_1d  = candles_1d[:-1]
-    today_1d    = candles_1d[-1]
-    today_low_1d = today_1d["low"]
-    atl_1d       = min(c["low"] for c in history_1d)
+    if len(closed_1d) < 1:
+        print(f"[ATL] {symbol}: no closed 1D candles")
+        return False, 0, 0
 
-    hit_1d = today_low_1d <= atl_1d
-    print(f"[ATL] {symbol} 1D — today_low={today_low_1d}, ATL={atl_1d}, hit={hit_1d}")
+    today_low_1d = current_1d["low"]
+    atl_1d       = min(c["low"] for c in closed_1d)
+    hit_1d       = today_low_1d <= atl_1d
+    print(f"[ATL] {symbol} 1D — current_low={today_low_1d}, ATL={atl_1d}, hit={hit_1d}")
 
     if not hit_1d:
-        return False
+        return False, today_low_1d, atl_1d
 
-    # --- 3D check (confirm) ---
+    # --- 3D confirm ---
     candles_3d = fetch_candles(pair, "3d", limit=500)
     if len(candles_3d) < 2:
-        print(f"[ATL] {symbol}: not enough 3D candles, skipping 3D confirm")
-        # If no 3D data available, pass on 1D alone (optional: change to return False)
-        return True
+        print(f"[ATL] {symbol}: not enough 3D candles — passing on 1D only")
+        return True, today_low_1d, atl_1d
 
-    history_3d   = candles_3d[:-1]
-    today_3d     = candles_3d[-1]
-    today_low_3d = today_3d["low"]
-    atl_3d       = min(c["low"] for c in history_3d)
+    closed_3d, current_3d = split_candles(candles_3d, "3d")
+    if len(closed_3d) < 1:
+        print(f"[ATL] {symbol}: no closed 3D candles — passing on 1D only")
+        return True, today_low_1d, atl_1d
 
-    hit_3d = today_low_3d <= atl_3d
-    print(f"[ATL] {symbol} 3D — today_low={today_low_3d}, ATL={atl_3d}, hit={hit_3d}")
+    today_low_3d = current_3d["low"]
+    atl_3d       = min(c["low"] for c in closed_3d)
+    hit_3d       = today_low_3d <= atl_3d
+    print(f"[ATL] {symbol} 3D — current_low={today_low_3d}, ATL={atl_3d}, hit={hit_3d}")
 
-    return hit_3d
+    return hit_3d, today_low_1d, atl_1d
 
 
 # =====================================================
@@ -173,7 +195,6 @@ def run_bot(cycle):
         print("No symbols fetched.")
         return
 
-    # Every 10th cycle: clean TP COMPLETED rows
     if cycle % 10 == 0:
         print("\n--- Cleaning TP COMPLETED rows ---")
         delete_tp_completed_rows()
@@ -181,7 +202,6 @@ def run_bot(cycle):
         next_clean = ((cycle // 10) + 1) * 10
         print(f"--- Skipping TP cleanup (next at cycle {next_clean}) ---")
 
-    # Get already-logged ATL symbols to avoid duplicates
     existing_atl = get_existing_atl_symbols()
     print(f"[SHEET] Already logged ATL symbols: {len(existing_atl)}")
 
@@ -193,23 +213,14 @@ def run_bot(cycle):
             continue
 
         try:
-            pair = symbol_to_pair(symbol)
-            candles_1d = fetch_candles(pair, "1d", limit=1000)
-            if len(candles_1d) < 2:
-                continue
-
-            today_low = candles_1d[-1]["low"]
-            atl       = min(c["low"] for c in candles_1d[:-1])
-
-            hit = check_atl(symbol)
+            hit, today_low, atl = check_atl(symbol)
             if hit:
                 atl_hits.append((symbol, today_low, atl))
                 add_atl_to_sheet(symbol, today_low, atl)
-
         except Exception as e:
             print(f"[ERROR] {symbol}: {e}")
 
-        time.sleep(0.2)   # gentle rate limit
+        time.sleep(0.2)
 
     print("\n" + "=" * 50)
     print(f"✅ DONE — {len(atl_hits)} ATL hits found")
