@@ -50,14 +50,26 @@ CANDLE_URL = "https://public.coindcx.com/market_data/candles"
 def fetch_candles(pair, interval, limit=500):
     """
     interval: '1d' or '3d'
-    Returns list of candles: each is a list [timestamp, open, high, low, close, volume]
+    Returns list of candles, each normalised to a dict with key 'low'.
     """
     try:
         params = {"pair": pair, "interval": interval, "limit": limit}
         r = requests.get(CANDLE_URL, params=params, timeout=15)
         data = r.json()
-        # API returns list of candles sorted oldest → newest
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        normalised = []
+        for c in data:
+            if isinstance(c, dict):
+                # dict format: keys may be 'low', 'l', or positional
+                low = c.get("low") or c.get("l")
+                normalised.append({"low": float(low)})
+            elif isinstance(c, (list, tuple)) and len(c) >= 4:
+                # list format: [timestamp, open, high, low, ...]
+                normalised.append({"low": float(c[3])})
+            else:
+                print(f"[CANDLES] Unknown candle format: {c}")
+        return normalised
     except Exception as e:
         print(f"[CANDLES] Error fetching {pair} {interval}: {e}")
         return []
@@ -91,8 +103,8 @@ def check_atl(symbol):
     # Last candle = today (may be forming), rest = history
     history_1d  = candles_1d[:-1]
     today_1d    = candles_1d[-1]
-    today_low_1d = float(today_1d[3])           # index 3 = low
-    atl_1d       = min(float(c[3]) for c in history_1d)
+    today_low_1d = today_1d["low"]
+    atl_1d       = min(c["low"] for c in history_1d)
 
     hit_1d = today_low_1d <= atl_1d
     print(f"[ATL] {symbol} 1D — today_low={today_low_1d}, ATL={atl_1d}, hit={hit_1d}")
@@ -109,8 +121,8 @@ def check_atl(symbol):
 
     history_3d   = candles_3d[:-1]
     today_3d     = candles_3d[-1]
-    today_low_3d = float(today_3d[3])
-    atl_3d       = min(float(c[3]) for c in history_3d)
+    today_low_3d = today_3d["low"]
+    atl_3d       = min(c["low"] for c in history_3d)
 
     hit_3d = today_low_3d <= atl_3d
     print(f"[ATL] {symbol} 3D — today_low={today_low_3d}, ATL={atl_3d}, hit={hit_3d}")
@@ -186,8 +198,8 @@ def run_bot(cycle):
             if len(candles_1d) < 2:
                 continue
 
-            today_low = float(candles_1d[-1][3])
-            atl       = min(float(c[3]) for c in candles_1d[:-1])
+            today_low = candles_1d[-1]["low"]
+            atl       = min(c["low"] for c in candles_1d[:-1])
 
             hit = check_atl(symbol)
             if hit:
