@@ -97,11 +97,12 @@ def split_candles(candles, interval):
 
     A candle is forming if its open_ts + interval_ms > now.
     """
+    if not candles:
+        return [], None
     now_ms       = int(time.time() * 1000)
     interval_ms  = INTERVAL_MS[interval]
     closed  = [c for c in candles if c["ts"] + interval_ms <= now_ms]
     forming = [c for c in candles if c["ts"] + interval_ms >  now_ms]
-    # current forming candle = last one; fallback to last closed if none detected
     current = forming[-1] if forming else candles[-1]
     return closed, current
 
@@ -121,8 +122,8 @@ def check_atl(symbol):
     candles_1d = fetch_candles(pair, "1d", limit=1000)
     closed_1d, current_1d = split_candles(candles_1d, "1d")
 
-    if len(closed_1d) < 1:
-        print(f"[ATL] {symbol}: no closed 1D candles")
+    if not closed_1d or current_1d is None:
+        print(f"[ATL] {symbol}: no 1D candle data")
         return False, 0, 0
 
     today_low_1d = current_1d["low"]
