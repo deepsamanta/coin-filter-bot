@@ -115,6 +115,7 @@ def check_atl(symbol):
     """
     ATL hit = current forming candle's low <= min(low) of ALL closed candles.
     Confirmed on both 1D and 3D. Wick (low) is used — correct by definition.
+    Only coins with 150+ closed 1D candles (older than 150 days) are considered.
     """
     pair = symbol_to_pair(symbol)
 
@@ -124,6 +125,11 @@ def check_atl(symbol):
 
     if not closed_1d or current_1d is None:
         print(f"[ATL] {symbol}: no 1D candle data")
+        return False, 0, 0
+
+    # --- AGE FILTER: skip coins younger than 150 days ---
+    if len(closed_1d) < 150:
+        print(f"[ATL] {symbol}: only {len(closed_1d)} days old — skipping (< 150 days)")
         return False, 0, 0
 
     today_low_1d = current_1d["low"]
