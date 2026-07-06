@@ -42,7 +42,6 @@ def get_all_symbols():
 
 
 def symbol_to_pair(symbol):
-    """Convert e.g. BTCUSDT → B-BTC_USDT"""
     if symbol.endswith("USDT"):
         base = symbol[:-4]
         return f"B-{base}_USDT"
@@ -61,9 +60,6 @@ INTERVAL_MS = {
 }
 
 def fetch_candles(pair, interval, limit=500):
-    """
-    Fetches candles and returns list of {"ts": int, "low": float}, sorted oldest→newest.
-    """
     try:
         params = {"pair": pair, "interval": interval, "limit": limit}
         r = requests.get(CANDLE_URL, params=params, timeout=15)
@@ -90,17 +86,10 @@ def fetch_candles(pair, interval, limit=500):
 
 
 def split_candles(candles, interval):
-    """
-    Split into:
-      - closed: all fully closed candles
-      - current: the still-forming candle (most recent)
-
-    A candle is forming if its open_ts + interval_ms > now.
-    """
     if not candles:
         return [], None
-    now_ms       = int(time.time() * 1000)
-    interval_ms  = INTERVAL_MS[interval]
+    now_ms      = int(time.time() * 1000)
+    interval_ms = INTERVAL_MS[interval]
     closed  = [c for c in candles if c["ts"] + interval_ms <= now_ms]
     forming = [c for c in candles if c["ts"] + interval_ms >  now_ms]
     current = forming[-1] if forming else candles[-1]
@@ -108,15 +97,29 @@ def split_candles(candles, interval):
 
 
 # =====================================================
+# TICKER
+# =====================================================
+
+def get_all_current_prices():
+    try:
+        r = requests.get("https://api.coindcx.com/exchange/ticker", timeout=15)
+        prices = {}
+        for t in r.json():
+            market = str(t.get("market", "")).upper()
+            lp = t.get("last_price")
+            if market and lp:
+                prices[market] = float(lp)
+        return prices
+    except Exception as e:
+        print(f"[TICKER] Error: {e}")
+        return {}
+
+
+# =====================================================
 # ATL DETECTION
 # =====================================================
 
 def check_atl(symbol):
-    """
-    ATL hit = current forming candle's low <= min(low) of ALL closed candles.
-    Confirmed on both 1D and 3D. Wick (low) is used — correct by definition.
-    Only coins with 150+ closed 1D candles (older than 150 days) are considered.
-    """
     pair = symbol_to_pair(symbol)
 
     # --- 1D ---
@@ -127,7 +130,6 @@ def check_atl(symbol):
         print(f"[ATL] {symbol}: no 1D candle data")
         return False, 0, 0
 
-    # --- AGE FILTER: skip coins younger than 150 days ---
     if len(closed_1d) < 150:
         print(f"[ATL] {symbol}: only {len(closed_1d)} days old — skipping (< 150 days)")
         return False, 0, 0
@@ -163,6 +165,47 @@ def check_atl(symbol):
 # SHEET HELPERS
 # =====================================================
 
+def remove_bounced_stale_rows(prices):
+    """
+    Delete rows where col B == 'ATL HIT' (trade never taken)
+    and current price is 16%+ above today_low in col C (the real ATL price).
+    """
+    rows = sheet.get_all_values()
+    to_delete = []
+
+    for i, row in enumerate(rows):
+        if len(row) < 3:
+            continue
+        symbol  = str(row[0]).strip().upper()
+        col_b   = str(row[1]).strip().upper()
+        atl_str = str(row[2]).strip()   # col C — today_low = real ATL
+
+        if col_b != "ATL HIT":
+            continue
+
+        try:
+            atl_price = float(atl_str)
+        except ValueError:
+            continue
+
+        if atl_price <= 0:
+            continue
+
+        current = prices.get(symbol)
+        if current is None:
+            continue
+
+        bounce_pct = (current - atl_price) / atl_price * 100
+        if bounce_pct >= 16:
+            to_delete.append(i + 1)
+            print(f"[SHEET] 🗑️ {symbol} bounced {bounce_pct:.1f}% from ATL — queued for removal")
+
+    for row_num in sorted(to_delete, reverse=True):
+        sheet.delete_rows(row_num)
+        print(f"[SHEET] Deleted stale row {row_num}")
+        time.sleep(0.3)
+
+
 def delete_tp_completed_rows():
     rows = sheet.get_all_values()
     for i in range(len(rows) - 1, -1, -1):
@@ -196,6 +239,9 @@ def run_bot(cycle):
     print("=" * 50)
     print(f"🤖 ATL BOT — CYCLE #{cycle}")
     print("=" * 50)
+
+    prices = get_all_current_prices()
+    remove_bounced_stale_rows(prices)
 
     symbols = get_all_symbols()
     if not symbols:
