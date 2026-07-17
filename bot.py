@@ -42,25 +42,6 @@ def get_all_symbols():
 
 
 # =====================================================
-# TICKER (CURRENT PRICES)
-# =====================================================
-
-def get_all_current_prices():
-    try:
-        r = requests.get("https://api.coindcx.com/exchange/ticker", timeout=15)
-        prices = {}
-        for t in r.json():
-            market = str(t.get("market", "")).upper()
-            lp = t.get("last_price")
-            if market and lp:
-                prices[market] = float(lp)
-        return prices
-    except Exception as e:
-        print(f"[TICKER] Error: {e}")
-        return {}
-
-
-# =====================================================
 # MAIN BOT
 # =====================================================
 
@@ -74,19 +55,16 @@ def run_bot(cycle):
         print("No symbols fetched from CoinDCX.")
         return
 
-    prices = get_all_current_prices()
-
     # Get all existing symbols from Column A to avoid duplicates
     existing_rows = sheet.get_all_values()
     existing_symbols = set(str(row[0]).strip().upper() for row in existing_rows if row)
     print(f"[SHEET] Already logged symbols: {len(existing_symbols)}")
 
-    # Collect all coins that aren't in the sheet yet
+    # Collect all coins that aren't in the sheet yet (Only adding the symbol)
     new_rows = []
     for symbol in symbols:
         if symbol.upper() not in existing_symbols:
-            current_price = prices.get(symbol.upper(), "N/A")
-            new_rows.append([symbol, current_price])
+            new_rows.append([symbol])  # This writes ONLY to Column A
 
     # Bulk add to Google Sheets
     if new_rows:
@@ -124,4 +102,3 @@ while True:
         print(f"\n❌ BOT ERROR: {e}")
         print("⏳ Retrying in 60 seconds...")
         time.sleep(60)
-
